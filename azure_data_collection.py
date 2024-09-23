@@ -1,85 +1,84 @@
 import os
+import logging
 from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
 from azure.cosmos import CosmosClient, exceptions
-from datetime import datetime
-import json
-import logging
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# 환경 변수에서 설정 불러오기
-CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-BLOB_CONTAINER_NAME = os.getenv("AZURE_STORAGE_CONTAINER_NAME")
-COSMOS_ENDPOINT = os.getenv("COSMOS_DB_ENDPOINT")
-COSMOS_KEY = os.getenv("COSMOS_DB_KEY")
-COSMOS_DATABASE_NAME = os.getenv("COSMOS_DB_NAME")
-COSMOS_CONTAINER_NAME = os.getenv("COSMOS_DB_CONTAINER_NAME")
+def load_local_data(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            data = file.read()
+            logging.info(f"로컬에서 데이터 불러옴: {file_path}")
+            return data
+    except FileNotFoundError:
+        logging.error(f"로컬 데이터 파일을 찾을 수 없습니다: {file_path}")
+        return None
+
+def save_local_data(data, file_path):
+    try:
+        with open(file_path, 'w', encoding='utf-8') as file:
+            file.write(data)
+            logging.info(f"데이터가 로컬에 저장되었습니다: {file_path}")
+    except Exception as e:
+        logging.error(f"로컬 데이터 저장 중 오류 발생: {e}")
 
 def initialize_blob_client():
-    """Blob Storage 클라이언트 초기화"""
     try:
-        blob_service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
-        return blob_service_client.get_container_client(BLOB_CONTAINER_NAME)
+        connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+        if not connection_string:
+            raise ValueError("Blob Storage 연결 문자열이 없습니다.")
+        
+        # BlobServiceClient 초기화
+        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+        logging.info("Blob Storage 클라이언트가 성공적으로 초기화되었습니다.")
+        return blob_service_client
     except Exception as e:
-        logging.error(f"Blob 클라이언트 초기화 오류: {str(e)}")
+        logging.error(f"Blob 클라이언트 초기화 오류: {e}")
         return None
 
 def initialize_cosmos_client():
-    """Cosmos DB 클라이언트 초기화"""
     try:
-        client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
-        database = client.get_database_client(COSMOS_DATABASE_NAME)
-        return database.get_container_client(COSMOS_CONTAINER_NAME)
+        uri = os.getenv('COSMOS_DB_URI')
+        key = os.getenv('COSMOS_DB_PRIMARY_KEY')
+        if not uri or not key:
+            raise ValueError("Cosmos DB URI 또는 Primary Key가 없습니다.")
+
+        # CosmosClient 초기화
+        client = CosmosClient(uri, key)
+        logging.info("Cosmos DB 클라이언트가 성공적으로 초기화되었습니다.")
+        return client
+    except exceptions.CosmosHttpResponseError as e:
+        logging.error(f"Cosmos DB 응답 오류: {e}")
     except Exception as e:
-        logging.error(f"Cosmos DB 클라이언트 초기화 오류: {str(e)}")
-        return None
-
-def store_data_in_blob(container_client, data):
-    """Blob Storage에 데이터 저장"""
-    if not container_client:
-        logging.error("Blob 컨테이너 클라이언트가 초기화되지 않았습니다.")
-        return
-
-    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    blob_name = f'data_{timestamp}.json'
-    try:
-        blob_client = container_client.get_blob_client(blob_name)
-        blob_client.upload_blob(json.dumps(data), overwrite=True)
-        logging.info(f'데이터가 Blob Storage에 저장되었습니다. Blob 이름: {blob_name}')
-    except Exception as e:
-        logging.error(f"Blob Storage 업로드 오류: {str(e)}")
-
-def store_data_in_cosmos(container, data):
-    """Cosmos DB에 데이터 저장"""
-    if not container:
-        logging.error("Cosmos DB 컨테이너 클라이언트가 초기화되지 않았습니다.")
-        return
-
-    data['id'] = str(datetime.now().timestamp())
-    try:
-        container.create_item(body=data)
-        logging.info(f'데이터가 Cosmos DB에 저장되었습니다. ID: {data["id"]}')
-    except exceptions.CosmosResourceExistsError:
-        logging.warning("해당 항목이 이미 Cosmos DB에 존재합니다.")
-    except Exception as e:
-        logging.error(f"Cosmos DB 데이터 저장 오류: {str(e)}")
+        logging.error(f"Cosmos DB 클라이언트 초기화 오류: {e}")
+    return None
 
 def main():
-    # 클라이언트 초기화
-    blob_container = initialize_blob_client()
-    cosmos_container = initialize_cosmos_client()
+    # 1. 로컬 데이터 저장 및 불러오기
+    local_file_path = 'local_data.json'
+    data = '{"example": "data"}'  # 저장할 예시 데이터
+    save_local_data(data, local_file_path)
+    loaded_data = load_local_data(local_file_path)
 
-    if not blob_container or not cosmos_container:
-        logging.error("클라이언트 초기화 실패. 프로그램을 종료합니다.")
+    if loaded_data is None:
+        logging.error("로컬 데이터를 로드하는 데 실패했습니다. 프로그램을 종료합니다.")
         return
 
-    # 샘플 데이터
-    data = {"timestamp": datetime.now().isoformat(), "value": "샘플 데이터"}
+    # 2. Blob Storage 클라이언트 초기화
+    blob_service_client = initialize_blob_client()
+    if blob_service_client is None:
+        logging.error("Blob Storage 클라이언트 초기화에 실패했습니다. 프로그램을 종료합니다.")
+        return
 
-    # 데이터 저장
-    store_data_in_blob(blob_container, data)
-    store_data_in_cosmos(cosmos_container, data)
+    # 3. Cosmos DB 클라이언트 초기화
+    cosmos_client = initialize_cosmos_client()
+    if cosmos_client is None:
+        logging.error("Cosmos DB 클라이언트 초기화에 실패했습니다. 프로그램을 종료합니다.")
+        return
+
+    logging.info("모든 클라이언트가 성공적으로 초기화되었습니다.")
 
 if __name__ == "__main__":
     main()
